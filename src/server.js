@@ -24,10 +24,16 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .map((o) => o.trim())
   .filter(Boolean);
 
+const allowAllOrigins = allowedOrigins.includes('*');
+
 app.use(
   cors({
     origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, curl, Postman)
       if (!origin) return callback(null, true);
+      // Allow all origins if * is set
+      if (allowAllOrigins) return callback(null, true);
+      // Allow if origin is in the list
       if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
