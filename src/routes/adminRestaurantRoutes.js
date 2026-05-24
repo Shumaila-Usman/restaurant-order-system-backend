@@ -51,6 +51,8 @@ router.post('/', async (req, res) => {
       sourceOrderNoteField: sourceOrderNoteField || null,
       sourceFulfillmentTypeField: sourceFulfillmentTypeField || null,
       isActive: isActive !== undefined ? isActive : true,
+      printerEnabled: false, // disabled by default — requires printer model confirmation
+      printerNotes: null,
     });
 
     console.log(`[Admin] Created restaurant: name="${restaurant.name}" key="${restaurant.restaurantKey}"`);
@@ -105,6 +107,7 @@ router.patch('/:id', async (req, res) => {
       'sourceOrderNumberField', 'sourceOrderTypeField', 'sourceItemsField',
       'sourceOrderNoteField', 'sourceFulfillmentTypeField',
       'isActive',
+      'printerEnabled', 'printerNotes', // future feature — disabled by default
     ];
 
     const updates = {};

@@ -183,3 +183,43 @@ For Vercel: base64-encode the JSON and set `FIREBASE_SERVICE_ACCOUNT_BASE64`.
 
 Firebase is optional for local testing — the server starts fine without it,
 FCM notifications are simply skipped.
+
+---
+
+## Printer Integration
+
+> **Status: SCAFFOLD ONLY — Not implemented**
+>
+> Printer integration is pending confirmation of the client's printer model.
+> Do not include printer in acceptance criteria until the information below is provided.
+
+### Information required from client before implementation
+
+| Item | Details needed |
+|---|---|
+| Printer brand and model | e.g. GOOJPRT PT-210, Rongta RPP02N, Xprinter XP-P300 |
+| Bluetooth type | Classic Bluetooth (SPP/RFCOMM) or BLE (Bluetooth Low Energy) |
+| ESC/POS support | Yes / No / Unknown |
+| Paper width | 58mm or 80mm |
+| Android device model | e.g. Samsung Galaxy Tab A8 |
+| Android version | e.g. Android 12 |
+| Desired receipt format | Items list, totals, order note, pickup time, etc. |
+
+### Implementation plan (after client provides printer details)
+
+1. Confirm printer protocol (ESC/POS is most common for Chinese receipt printers)
+2. Choose compatible React Native library:
+   - `react-native-bluetooth-escpos-printer` — most popular for ESC/POS over Classic Bluetooth
+   - `react-native-ble-plx` — for BLE printers (requires manual ESC/POS byte encoding)
+   - `react-native-thermal-receipt-printer-image-qr` — alternative with image support
+3. Add library to `mobile-app/package.json`
+4. Run `npx expo prebuild` to generate native code
+5. Build new EAS APK — Bluetooth native modules do NOT work in Expo Go
+6. Implement `scanBluetoothPrinters()`, `connectPrinter()`, `printOrderReceipt()` in `src/services/printer.ts`
+7. Test with actual printer hardware
+
+### Current scaffold files
+
+- `mobile-app/src/services/printer.ts` — types, AsyncStorage settings, placeholder functions
+- Settings screen — printer section hidden by default, toggle to show placeholder UI
+- Restaurant model — `printerEnabled` field (default: false), `printerNotes` field

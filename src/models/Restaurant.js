@@ -83,6 +83,16 @@ const restaurantSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // ─── Printer (future feature — pending client confirmation) ────────────
+    // Set to true only after printer model is confirmed and integration is built.
+    printerEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    printerNotes: {
+      type: String,
+      default: null,
+    },
   },
   {
     timestamps: true,
