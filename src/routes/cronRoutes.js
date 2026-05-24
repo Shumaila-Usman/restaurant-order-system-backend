@@ -138,8 +138,15 @@ router.get('/check-paid-orders', async (req, res) => {
           const normalized = normalizeSourceOrder(raw, restaurant, null);
           const sourceOrderId = raw._id.toString();
 
-          // Build FCM data payload (data-only so Notifee handles display)
+          // Build FCM payload with both notification (for OS display when app is closed)
+          // and data (for Notifee when app is background/open)
           const fcmPayload = {
+            // notification field: Android OS displays this when app is completely closed
+            notification: {
+              title: `🔔 New Order #${normalized.orderNumber?.toString() || sourceOrderId}`,
+              body: `${restaurant.name} — ${normalized.customerName || 'Customer'} — $${normalized.total || '0'}`,
+            },
+            // data field: available to app when open or background
             data: {
               type: 'NEW_ORDER',
               restaurantId: restaurant._id.toString(),
@@ -154,6 +161,16 @@ router.get('/check-paid-orders', async (req, res) => {
               pickupMode: normalized.pickupMode || 'unknown',
               pickupTime: normalized.pickupTime || '',
               createdAt: normalized.createdAt || '',
+            },
+            // Android specific config
+            android: {
+              priority: 'high',
+              notification: {
+                sound: 'notification',
+                channelId: 'new-orders-v2',
+                priority: 'max',
+                defaultSound: false,
+              },
             },
           };
 
