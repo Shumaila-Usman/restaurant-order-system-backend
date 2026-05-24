@@ -9,19 +9,31 @@ const router = express.Router();
 /**
  * POST /api/auth/login
  * Restaurant owner login.
- * Returns a JWT token valid for JWT_EXPIRES_IN.
+ *
+ * Accepts:
+ *   { login: "loginId-or-email", password: "..." }   ← new format
+ *   { email: "...", password: "..." }                 ← backward compatible
+ *
+ * Login search order:
+ *   1. loginId (exact match, case-insensitive)
+ *   2. email (exact match, case-insensitive)
  */
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { login, email, password } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
+    // Support both { login, password } and legacy { email, password }
+    const loginValue = (login || email || '').trim().toLowerCase();
+
+    if (!loginValue || !password) {
+      return res.status(400).json({ error: 'Login ID (or email) and password are required' });
     }
 
-    const user = await RestaurantUser.findOne({
-      email: email.toLowerCase().trim(),
-    });
+    // Try loginId first, then email
+    let user = await RestaurantUser.findOne({ loginId: loginValue });
+    if (!user) {
+      user = await RestaurantUser.findOne({ email: loginValue });
+    }
 
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -57,6 +69,7 @@ router.post('/login', async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        loginId: user.loginId,
         restaurantId: restaurant._id,
         restaurantName: restaurant.name,
         restaurantKey: restaurant.restaurantKey,
@@ -79,6 +92,7 @@ router.get('/me', requireOwnerAuth, async (req, res) => {
       id: req.user._id,
       name: req.user.name,
       email: req.user.email,
+      loginId: req.user.loginId,
       restaurantId: req.restaurant._id,
       restaurantName: req.restaurant.name,
       restaurantKey: req.restaurant.restaurantKey,

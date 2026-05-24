@@ -9,43 +9,71 @@ router.use(requireAdminAuth);
 
 /**
  * POST /api/admin/restaurants/:restaurantId/users
- * Create a restaurant owner user.
+ * Create a restaurant owner/staff user.
+ *
+ * Body:
+ *   name        (required)
+ *   loginId     (optional) — unique login username, e.g. "onopoke_owner"
+ *   email       (optional) — if provided must be unique
+ *   password    (required) — minimum 3 characters (client requirement)
+ *   isActive    (optional, default true)
+ *
+ * At least one of loginId or email must be provided.
  */
 router.post('/restaurants/:restaurantId/users', async (req, res) => {
   try {
     const { restaurantId } = req.params;
-    const { name, email, password } = req.body;
+    const { name, loginId, email, password, isActive } = req.body;
 
-    if (!name || !email || !password) {
-      return res.status(400).json({ error: 'name, email, and password are required' });
+    if (!name) {
+      return res.status(400).json({ error: 'name is required' });
+    }
+    if (!loginId && !email) {
+      return res.status(400).json({ error: 'At least one of loginId or email is required' });
+    }
+    if (!password) {
+      return res.status(400).json({ error: 'password is required' });
+    }
+    if (password.length < 3) {
+      return res.status(400).json({ error: 'Password must be at least 3 characters' });
     }
 
     const restaurant = await Restaurant.findById(restaurantId);
     if (!restaurant) return res.status(404).json({ error: 'Restaurant not found' });
 
-    const existing = await RestaurantUser.findOne({ email: email.toLowerCase().trim() });
-    if (existing) return res.status(409).json({ error: 'Email already in use' });
+    // Check uniqueness
+    if (loginId) {
+      const existingLoginId = await RestaurantUser.findOne({ loginId: loginId.toLowerCase().trim() });
+      if (existingLoginId) return res.status(409).json({ error: 'Login ID already in use' });
+    }
+    if (email) {
+      const existingEmail = await RestaurantUser.findOne({ email: email.toLowerCase().trim() });
+      if (existingEmail) return res.status(409).json({ error: 'Email already in use' });
+    }
 
-    // passwordHash field is set to plain password; the pre-save hook hashes it
     const user = await RestaurantUser.create({
       restaurantId,
       name,
-      email: email.toLowerCase().trim(),
-      passwordHash: password,
-      isActive: true,
+      loginId: loginId ? loginId.toLowerCase().trim() : null,
+      email: email ? email.toLowerCase().trim() : null,
+      passwordHash: password, // pre-save hook hashes this
+      isActive: isActive !== undefined ? isActive : true,
     });
 
     console.log(
-      `[Admin] Created user: email="${user.email}" restaurant="${restaurant.name}"`
+      `[Admin] Created user: loginId="${user.loginId}" email="${user.email}" restaurant="${restaurant.name}"`
     );
 
     res.status(201).json({
       user: {
+        _id: user._id,
         id: user._id,
         name: user.name,
+        loginId: user.loginId,
         email: user.email,
         restaurantId: user.restaurantId,
         isActive: user.isActive,
+        createdAt: user.createdAt,
       },
     });
   } catch (err) {
@@ -75,14 +103,15 @@ router.get('/restaurants/:restaurantId/users', async (req, res) => {
 
 /**
  * PATCH /api/admin/users/:userId
- * Update user name, email, or isActive.
+ * Update user name, loginId, email, or isActive.
  */
 router.patch('/users/:userId', async (req, res) => {
   try {
-    const { name, email, isActive } = req.body;
+    const { name, loginId, email, isActive } = req.body;
     const updates = {};
     if (name !== undefined) updates.name = name;
-    if (email !== undefined) updates.email = email.toLowerCase().trim();
+    if (loginId !== undefined) updates.loginId = loginId ? loginId.toLowerCase().trim() : null;
+    if (email !== undefined) updates.email = email ? email.toLowerCase().trim() : null;
     if (isActive !== undefined) updates.isActive = isActive;
 
     const user = await RestaurantUser.findByIdAndUpdate(
@@ -103,22 +132,22 @@ router.patch('/users/:userId', async (req, res) => {
 /**
  * PATCH /api/admin/users/:userId/password
  * Change a restaurant owner's password.
+ * Minimum 3 characters (client requirement).
  */
 router.patch('/users/:userId/password', async (req, res) => {
   try {
     const { password } = req.body;
-    if (!password || password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    if (!password || password.length < 3) {
+      return res.status(400).json({ error: 'Password must be at least 3 characters' });
     }
 
     const user = await RestaurantUser.findById(req.params.userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Setting passwordHash to plain triggers the pre-save hash
-    user.passwordHash = password;
+    user.passwordHash = password; // pre-save hook hashes it
     await user.save();
 
-    console.log(`[Admin] Password changed for user: email="${user.email}"`);
+    console.log(`[Admin] Password changed for user: loginId="${user.loginId}" email="${user.email}"`);
     res.json({ message: 'Password updated successfully' });
   } catch (err) {
     console.error('[Admin] Change password error:', err.message);
@@ -135,7 +164,7 @@ router.delete('/users/:userId', async (req, res) => {
     const user = await RestaurantUser.findByIdAndDelete(req.params.userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    console.log(`[Admin] Deleted user: email="${user.email}"`);
+    console.log(`[Admin] Deleted user: loginId="${user.loginId}" email="${user.email}"`);
     res.json({ message: 'User deleted' });
   } catch (err) {
     console.error('[Admin] Delete user error:', err.message);

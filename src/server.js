@@ -73,7 +73,7 @@ app.use('/api/devices', deviceRoutes);
 app.use('/api/admin', adminAuthRoutes);
 app.use('/api/admin/restaurants', adminRestaurantRoutes);
 app.use('/api/admin', adminUserRoutes);
-app.use('/api/admin', adminOrderRoutes);
+app.use('/api/admin/orders', adminOrderRoutes);
 app.use('/api/cron', cronRoutes);
 app.use('/api/debug', debugRoutes);
 

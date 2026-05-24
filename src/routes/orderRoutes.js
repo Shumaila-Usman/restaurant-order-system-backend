@@ -112,9 +112,10 @@ router.get('/:id', async (req, res) => {
 router.patch('/:id/prep-time', async (req, res) => {
   try {
     const restaurant = req.restaurant;
-    const { prepTimeMinutes, customPrepTimeLabel } = req.body;
+    const { prepTimeMinutes, customPrepTimeLabel, useCustomerPickupTime } = req.body;
 
-    if (prepTimeMinutes === undefined) {
+    // Allow 0 as a valid value (used for "customer pickup time" sentinel)
+    if (prepTimeMinutes === undefined && !useCustomerPickupTime) {
       return res.status(400).json({ error: 'prepTimeMinutes is required' });
     }
 
@@ -122,7 +123,7 @@ router.patch('/:id/prep-time', async (req, res) => {
       { restaurantId: restaurant._id, sourceOrderId: req.params.id },
       {
         $set: {
-          prepTimeMinutes: Number(prepTimeMinutes),
+          prepTimeMinutes: Number(prepTimeMinutes ?? 0),
           customPrepTimeLabel: customPrepTimeLabel || null,
         },
         $setOnInsert: {
@@ -135,7 +136,7 @@ router.patch('/:id/prep-time', async (req, res) => {
 
     console.log(
       `[Orders] Prep time saved: restaurant="${restaurant.name}" ` +
-      `order="${req.params.id}" prepTime=${prepTimeMinutes}min`
+      `order="${req.params.id}" prepTime=${prepTimeMinutes}min label="${customPrepTimeLabel || ''}"`
     );
 
     res.json({ override });

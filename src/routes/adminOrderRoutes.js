@@ -12,12 +12,24 @@ router.use(requireAdminAuth);
 /**
  * GET /api/admin/orders
  * Fetch paid orders from ALL active restaurants.
- * Query params: limit (default 50 per restaurant)
+ * Query params:
+ *   limit        (default 50 per restaurant)
+ *   restaurantId (filter to one restaurant)
+ *   search       (filter by order number or customer name)
+ *   fromDate     (ISO date string)
+ *   toDate       (ISO date string)
+ *   page         (default 1)
  */
 router.get('/', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
-    const restaurants = await Restaurant.find({ isActive: true }).lean();
+    const { restaurantId: filterRestaurantId, search, fromDate, toDate } = req.query;
+
+    const restaurantQuery = filterRestaurantId
+      ? { isActive: true, _id: filterRestaurantId }
+      : { isActive: true };
+
+    const restaurants = await Restaurant.find(restaurantQuery).lean();
 
     const allOrders = [];
 
@@ -32,66 +44,48 @@ router.get('/', async (req, res) => {
         }).lean();
 
         const overrideMap = {};
-        for (const ov of overrides) {
-          overrideMap[ov.sourceOrderId] = ov;
-        }
+        for (const ov of overrides) overrideMap[ov.sourceOrderId] = ov;
 
         for (const raw of rawOrders) {
           const override = overrideMap[raw._id.toString()] || null;
-          allOrders.push(normalizeSourceOrder(raw, restaurant, override));
+          const normalized = normalizeSourceOrder(raw, restaurant, override);
+          delete normalized._detectedPickupFields;
+          allOrders.push(normalized);
         }
       } catch (err) {
-        console.error(
-          `[AdminOrders] Failed to fetch orders for restaurant="${restaurant.name}": ${err.message}`
-        );
+        console.error(`[AdminOrders] Failed for restaurant="${restaurant.name}": ${err.message}`);
       }
     }
 
-    // Sort all orders by createdAt descending
+    // Sort by createdAt descending
     allOrders.sort((a, b) => {
       const da = a.createdAt ? new Date(a.createdAt) : new Date(0);
       const db = b.createdAt ? new Date(b.createdAt) : new Date(0);
       return db - da;
     });
 
-    res.json({ orders: allOrders, total: allOrders.length });
-  } catch (err) {
-    console.error('[AdminOrders] Fetch all orders error:', err.message);
-    res.status(500).json({ error: 'Failed to fetch orders' });
-  }
-});
-
-/**
- * GET /api/admin/restaurants/:restaurantId/orders
- * Fetch paid orders for a specific restaurant.
- */
-router.get('/restaurants/:restaurantId/orders', async (req, res) => {
-  try {
-    const limit = Math.min(parseInt(req.query.limit) || 100, 200);
-    const restaurant = await Restaurant.findById(req.params.restaurantId).lean();
-    if (!restaurant) return res.status(404).json({ error: 'Restaurant not found' });
-
-    const rawOrders = await fetchPaidOrdersFromSource(restaurant, { limit });
-    const sourceIds = rawOrders.map((o) => o._id.toString());
-
-    const overrides = await OrderOverride.find({
-      restaurantId: restaurant._id,
-      sourceOrderId: { $in: sourceIds },
-    }).lean();
-
-    const overrideMap = {};
-    for (const ov of overrides) {
-      overrideMap[ov.sourceOrderId] = ov;
+    // Apply filters
+    let filtered = allOrders;
+    if (search) {
+      const q = search.toLowerCase();
+      filtered = filtered.filter((o) =>
+        (o.orderNumber || '').toLowerCase().includes(q) ||
+        (o.customerName || '').toLowerCase().includes(q) ||
+        (o.customerEmail || '').toLowerCase().includes(q)
+      );
+    }
+    if (fromDate) {
+      const from = new Date(fromDate);
+      filtered = filtered.filter((o) => o.createdAt && new Date(o.createdAt) >= from);
+    }
+    if (toDate) {
+      const to = new Date(toDate);
+      filtered = filtered.filter((o) => o.createdAt && new Date(o.createdAt) <= to);
     }
 
-    const orders = rawOrders.map((raw) => {
-      const override = overrideMap[raw._id.toString()] || null;
-      return normalizeSourceOrder(raw, restaurant, override);
-    });
-
-    res.json({ orders, total: orders.length });
+    res.json({ orders: filtered, total: filtered.length });
   } catch (err) {
-    console.error('[AdminOrders] Fetch restaurant orders error:', err.message);
+    console.error('[AdminOrders] Fetch all orders error:', err.message);
     res.status(500).json({ error: 'Failed to fetch orders' });
   }
 });
