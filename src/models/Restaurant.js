@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+// credentialCrypto is used in routes, not the model itself
 
 const restaurantSchema = new mongoose.Schema(
   {
@@ -92,6 +93,48 @@ const restaurantSchema = new mongoose.Schema(
     printerNotes: {
       type: String,
       default: null,
+    },
+    // ─── Website Admin Panel Credentials (MCP credential vault) ───────────
+    // Stores the restaurant's own website admin panel credentials.
+    // MCP stores and manages these credentials.
+    // integrationType = "manual": MCP stores only; admin must use credentials manually.
+    // integrationType = "api" / "shared_db": future — requires per-website integration.
+    websiteAdminUrl: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    websiteAdminLoginId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    websiteAdminEmail: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    // AES-256-GCM encrypted — never returned as-is; decrypted only in admin endpoints
+    websiteAdminPasswordEncrypted: {
+      type: String,
+      default: null,
+    },
+    websiteAdminPasswordUpdatedAt: {
+      type: Date,
+      default: null,
+    },
+    websiteAdminPasswordUpdatedBy: {
+      type: String,
+      default: null,
+    },
+    websiteAdminNotes: {
+      type: String,
+      default: null,
+    },
+    websiteAdminIntegrationType: {
+      type: String,
+      enum: ['manual', 'api', 'shared_db'],
+      default: 'manual',
     },
   },
   {

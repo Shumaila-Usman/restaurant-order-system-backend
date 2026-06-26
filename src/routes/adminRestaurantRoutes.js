@@ -4,6 +4,7 @@ const OrderOverride = require('../models/OrderOverride');
 const { requireAdminAuth } = require('../middleware/adminAuthMiddleware');
 const { fetchPaidOrdersFromSource } = require('../utils/sourceDb');
 const { normalizeSourceOrder } = require('../utils/normalizeOrder');
+const { encryptCredential, decryptCredential } = require('../utils/credentialCrypto');
 
 const router = express.Router();
 
@@ -69,7 +70,9 @@ router.post('/', async (req, res) => {
  */
 router.get('/', async (req, res) => {
   try {
-    const restaurants = await Restaurant.find().sort({ name: 1 }).lean();
+    const restaurants = await Restaurant.find().sort({ name: 1 })
+      .select('-websiteAdminPasswordEncrypted')
+      .lean();
     const masked = restaurants.map((r) => ({ ...r, sourceDbUri: r.sourceDbUri ? '***' : null }));
     res.json({ restaurants: masked });
   } catch (err) {
@@ -84,7 +87,9 @@ router.get('/', async (req, res) => {
  */
 router.get('/:id', async (req, res) => {
   try {
-    const restaurant = await Restaurant.findById(req.params.id).lean();
+    const restaurant = await Restaurant.findById(req.params.id)
+      .select('-websiteAdminPasswordEncrypted')
+      .lean();
     if (!restaurant) return res.status(404).json({ error: 'Restaurant not found' });
     res.json({ restaurant });
   } catch (err) {
@@ -107,7 +112,7 @@ router.patch('/:id', async (req, res) => {
       'sourceOrderNumberField', 'sourceOrderTypeField', 'sourceItemsField',
       'sourceOrderNoteField', 'sourceFulfillmentTypeField',
       'isActive',
-      'printerEnabled', 'printerNotes', // future feature — disabled by default
+      'printerEnabled', 'printerNotes',
     ];
 
     const updates = {};
@@ -238,6 +243,106 @@ router.get('/:restaurantId/customers/export.csv', async (req, res) => {
   } catch (err) {
     console.error('[Admin] CSV export error:', err.message);
     res.status(500).json({ error: 'Failed to export customers' });
+  }
+});
+
+// ─── Website Admin Panel Credentials ─────────────────────────────────────────
+
+/**
+ * GET /api/admin/restaurants/:restaurantId/website-credentials
+ * Returns decrypted website admin credentials. Admin-only.
+ */
+router.get('/:restaurantId/website-credentials', async (req, res) => {
+  try {
+    const restaurant = await Restaurant.findById(req.params.restaurantId)
+      .select('name websiteAdminUrl websiteAdminLoginId websiteAdminEmail websiteAdminPasswordEncrypted websiteAdminPasswordUpdatedAt websiteAdminNotes websiteAdminIntegrationType')
+      .lean();
+
+    if (!restaurant) return res.status(404).json({ error: 'Restaurant not found' });
+
+    // Audit log — do NOT log the actual password
+    console.log(
+      `[Credentials] Website admin credentials VIEWED — restaurantId="${req.params.restaurantId}" ` +
+      `name="${restaurant.name}" by admin="${req.admin?.email || 'unknown'}" at ${new Date().toISOString()}`
+    );
+
+    let websiteAdminPassword = null;
+    let message = null;
+
+    if (restaurant.websiteAdminPasswordEncrypted) {
+      try {
+        websiteAdminPassword = decryptCredential(restaurant.websiteAdminPasswordEncrypted);
+      } catch (err) {
+        console.error('[Credentials] Website password decryption failed:', err.message);
+        message = 'Could not decrypt stored password. Please set a new password.';
+      }
+    } else {
+      message = 'No website admin password stored yet.';
+    }
+
+    res.json({
+      websiteAdminUrl: restaurant.websiteAdminUrl || null,
+      websiteAdminLoginId: restaurant.websiteAdminLoginId || null,
+      websiteAdminEmail: restaurant.websiteAdminEmail || null,
+      websiteAdminPassword,
+      websiteAdminPasswordUpdatedAt: restaurant.websiteAdminPasswordUpdatedAt || null,
+      websiteAdminNotes: restaurant.websiteAdminNotes || null,
+      websiteAdminIntegrationType: restaurant.websiteAdminIntegrationType || 'manual',
+      message,
+    });
+  } catch (err) {
+    console.error('[Admin] Get website credentials error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch website credentials' });
+  }
+});
+
+/**
+ * PATCH /api/admin/restaurants/:restaurantId/website-credentials
+ * Save/update website admin credentials.
+ * If websiteAdminPassword is provided, encrypts and stores it.
+ * If omitted, keeps existing password.
+ */
+router.patch('/:restaurantId/website-credentials', async (req, res) => {
+  try {
+    const {
+      websiteAdminUrl,
+      websiteAdminLoginId,
+      websiteAdminEmail,
+      websiteAdminPassword,
+      websiteAdminNotes,
+      websiteAdminIntegrationType,
+    } = req.body;
+
+    const restaurant = await Restaurant.findById(req.params.restaurantId);
+    if (!restaurant) return res.status(404).json({ error: 'Restaurant not found' });
+
+    const updates = {};
+    if (websiteAdminUrl !== undefined) updates.websiteAdminUrl = websiteAdminUrl || null;
+    if (websiteAdminLoginId !== undefined) updates.websiteAdminLoginId = websiteAdminLoginId || null;
+    if (websiteAdminEmail !== undefined) updates.websiteAdminEmail = websiteAdminEmail || null;
+    if (websiteAdminNotes !== undefined) updates.websiteAdminNotes = websiteAdminNotes || null;
+    if (websiteAdminIntegrationType !== undefined) updates.websiteAdminIntegrationType = websiteAdminIntegrationType || 'manual';
+
+    if (websiteAdminPassword) {
+      updates.websiteAdminPasswordEncrypted = encryptCredential(websiteAdminPassword);
+      updates.websiteAdminPasswordUpdatedAt = new Date();
+      updates.websiteAdminPasswordUpdatedBy = req.admin?.id || 'admin';
+    }
+
+    await Restaurant.findByIdAndUpdate(req.params.restaurantId, { $set: updates });
+
+    // Audit log — do NOT log the actual password
+    const passwordChanged = !!websiteAdminPassword;
+    console.log(
+      `[Credentials] Website admin credentials UPDATED — restaurantId="${req.params.restaurantId}" ` +
+      `name="${restaurant.name}" passwordChanged=${passwordChanged} ` +
+      `by admin="${req.admin?.email || 'unknown'}" at ${new Date().toISOString()}`
+    );
+
+    res.json({ message: 'Website credentials saved successfully' });
+  } catch (err) {
+    console.error('[Admin] Save website credentials error:', err.message);
+    res.status(500).json({ error: 'Failed to save website credentials' });
   }
 });
 

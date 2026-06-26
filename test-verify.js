@@ -284,10 +284,125 @@ async function run() {
     ? pass('POST /api/debug/send-test-notification', JSON.stringify(notifR.data.results || notifR.data.message))
     : fail('Test notification', JSON.stringify(notifR.data));
 
-  section('12. Admin Panel TypeScript Check');
+  section('12. App Login Credentials — GET /api/admin/users/:userId/credentials');
+  // Find the demo user
+  const usersR = await req('GET', `/api/admin/restaurants/${restaurantId}/users`, null, AT);
+  const demoUser = usersR.data.users?.find(u => u.loginId === 'demoowner');
+  if (!demoUser) {
+    fail('Demo user not found for credentials test');
+  } else {
+    // Step 1: reset to known password "123"
+    const reset1 = await req('PATCH', `/api/admin/users/${demoUser._id}/password`, { password: '123' }, AT);
+    reset1.status === 200 ? pass('Reset password to 123') : fail('Reset to 123', JSON.stringify(reset1.data));
+
+    // Step 2: GET credentials — must return "123"
+    const cred1 = await req('GET', `/api/admin/users/${demoUser._id}/credentials`, null, AT);
+    cred1.status === 200 ? pass('GET credentials returns 200') : fail('GET credentials status', cred1.status);
+    cred1.data.currentAppPassword === '123'
+      ? pass('currentAppPassword = "123" after reset')
+      : fail('currentAppPassword wrong after reset', cred1.data.currentAppPassword);
+    cred1.data.loginId === 'demoowner'
+      ? pass('credentials.loginId correct')
+      : fail('credentials.loginId', cred1.data.loginId);
+
+    // Step 3: login with 123 works
+    const login1 = await req('POST', '/api/auth/login', { login: 'demoowner', password: '123' });
+    login1.status === 200 && login1.data.token
+      ? pass('Login with 123 works')
+      : fail('Login with 123 failed', JSON.stringify(login1.data));
+
+    // Step 4: reset to "456"
+    const reset2 = await req('PATCH', `/api/admin/users/${demoUser._id}/password`, { password: '456' }, AT);
+    reset2.status === 200 ? pass('Reset password to 456') : fail('Reset to 456', JSON.stringify(reset2.data));
+
+    // Step 5: login with 456 works
+    const login2 = await req('POST', '/api/auth/login', { login: 'demoowner', password: '456' });
+    login2.status === 200 && login2.data.token
+      ? pass('Login with 456 works')
+      : fail('Login with 456 failed', JSON.stringify(login2.data));
+
+    // Step 6: login with old password 123 fails
+    const login3 = await req('POST', '/api/auth/login', { login: 'demoowner', password: '123' });
+    login3.status === 401
+      ? pass('Old password 123 correctly rejected')
+      : fail('Old password 123 not rejected', `status=${login3.status}`);
+
+    // Step 7: GET credentials returns "456"
+    const cred2 = await req('GET', `/api/admin/users/${demoUser._id}/credentials`, null, AT);
+    cred2.data.currentAppPassword === '456'
+      ? pass('GET credentials returns "456" after reset')
+      : fail('GET credentials wrong after reset to 456', cred2.data.currentAppPassword);
+
+    // Step 8: simulate close/reopen — call GET credentials again (twice)
+    const cred3 = await req('GET', `/api/admin/users/${demoUser._id}/credentials`, null, AT);
+    cred3.status === 200 && cred3.data.currentAppPassword === '456'
+      ? pass('GET credentials 2nd call (modal reopen simulation) still returns "456"')
+      : fail('GET credentials 2nd call failed', JSON.stringify(cred3.data));
+
+    const cred4 = await req('GET', `/api/admin/users/${demoUser._id}/credentials`, null, AT);
+    cred4.status === 200 && cred4.data.currentAppPassword === '456'
+      ? pass('GET credentials 3rd call returns "456" — decrypt is stable')
+      : fail('GET credentials 3rd call failed', JSON.stringify(cred4.data));
+  }
+
+  section('13. Website Admin Credentials');
+  const wSave = await req('PATCH', `/api/admin/restaurants/${restaurantId}/website-credentials`, {
+    websiteAdminUrl: 'https://demo-restaurant.com/admin',
+    websiteAdminLoginId: 'demoadmin',
+    websiteAdminEmail: 'admin@demo-restaurant.com',
+    websiteAdminPassword: 'WebPass123',
+    websiteAdminNotes: 'Test website credentials',
+    websiteAdminIntegrationType: 'manual',
+  }, AT);
+  wSave.status === 200
+    ? pass('PATCH website-credentials saved')
+    : fail('PATCH website-credentials', JSON.stringify(wSave.data));
+
+  const wGet = await req('GET', `/api/admin/restaurants/${restaurantId}/website-credentials`, null, AT);
+  if (wGet.status !== 200) {
+    fail('GET website-credentials', JSON.stringify(wGet.data));
+  } else {
+    pass('GET website-credentials', `status=${wGet.status}`);
+    wGet.data.websiteAdminUrl === 'https://demo-restaurant.com/admin'
+      ? pass('websiteAdminUrl correct')
+      : fail('websiteAdminUrl', wGet.data.websiteAdminUrl);
+    wGet.data.websiteAdminLoginId === 'demoadmin'
+      ? pass('websiteAdminLoginId correct')
+      : fail('websiteAdminLoginId', wGet.data.websiteAdminLoginId);
+    wGet.data.websiteAdminPassword === 'WebPass123'
+      ? pass('websiteAdminPassword decrypted correctly')
+      : fail('websiteAdminPassword wrong', wGet.data.websiteAdminPassword);
+    wGet.data.websiteAdminIntegrationType === 'manual'
+      ? pass('websiteAdminIntegrationType = manual')
+      : fail('websiteAdminIntegrationType', wGet.data.websiteAdminIntegrationType);
+
+    // Update password and verify
+    await req('PATCH', `/api/admin/restaurants/${restaurantId}/website-credentials`, {
+      websiteAdminPassword: 'NewWebPass456',
+    }, AT);
+    const wGet2 = await req('GET', `/api/admin/restaurants/${restaurantId}/website-credentials`, null, AT);
+    wGet2.data.websiteAdminPassword === 'NewWebPass456'
+      ? pass('Updated website password decrypts correctly')
+      : fail('Updated website password wrong', wGet2.data.websiteAdminPassword);
+  }
+
+  section('14. Security — encrypted fields not exposed in normal endpoints');
+  const listR2 = await req('GET', '/api/admin/restaurants', null, AT);
+  const r2 = listR2.data.restaurants?.[0];
+  !r2?.websiteAdminPasswordEncrypted
+    ? pass('websiteAdminPasswordEncrypted not in restaurant list')
+    : fail('websiteAdminPasswordEncrypted EXPOSED in restaurant list — security issue');
+
+  const usersR2 = await req('GET', `/api/admin/restaurants/${restaurantId}/users`, null, AT);
+  const u2 = usersR2.data.users?.[0];
+  !u2?.passwordHash && !u2?.appPasswordEncrypted && !u2?.passwordPlain
+    ? pass('passwordHash/appPasswordEncrypted/passwordPlain not in users list')
+    : fail('Sensitive password fields EXPOSED in users list — security issue');
+
+  section('15. Admin Panel TypeScript Check');
   console.log('  (run manually: cd admin-panel && npx tsc --noEmit)');
 
-  section('13. Mobile TypeScript Check');
+  section('16. Mobile TypeScript Check');
   console.log('  (run manually: cd mobile-app && npx tsc --noEmit)');
 
   console.log('\n' + '═'.repeat(55));
