@@ -91,6 +91,78 @@ router.get('/restaurants/:id/latest-orders', async (req, res) => {
 });
 
 /**
+ * GET /api/debug/restaurants/:id/collections
+ * List all collections in the restaurant's source DB.
+ * Useful for discovering where admin users are stored.
+ */
+router.get('/restaurants/:id/collections', async (req, res) => {
+  try {
+    const restaurant = await Restaurant.findById(req.params.id).lean();
+    if (!restaurant) return res.status(404).json({ error: 'Restaurant not found' });
+
+    const conn = await getSourceDbConnection(restaurant);
+    const collections = await conn.db.listCollections().toArray();
+    const names = collections.map((c) => c.name).sort();
+
+    res.json({
+      restaurantName: restaurant.name,
+      sourceDbName: restaurant.sourceDbName,
+      collections: names,
+    });
+  } catch (err) {
+    console.error('[Debug] List collections error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/debug/restaurants/:id/collection/:collectionName/sample
+ * Fetch 3 sample documents from a collection (field names only, values masked).
+ * Useful for finding the password field in the admin users collection.
+ */
+router.get('/restaurants/:id/collection/:collectionName/sample', async (req, res) => {
+  try {
+    const restaurant = await Restaurant.findById(req.params.id).lean();
+    if (!restaurant) return res.status(404).json({ error: 'Restaurant not found' });
+
+    const conn = await getSourceDbConnection(restaurant);
+    const schema = new mongoose.Schema({}, { strict: false });
+    const modelName = `Sample_${restaurant.restaurantKey}_${req.params.collectionName}`;
+    let Model;
+    try {
+      Model = conn.model(modelName);
+    } catch {
+      Model = conn.model(modelName, schema, req.params.collectionName);
+    }
+
+    const docs = await Model.find({}).limit(3).lean();
+
+    // Return field names + masked values (don't expose real passwords/emails)
+    const masked = docs.map((doc) => {
+      const out = {};
+      for (const [k, v] of Object.entries(doc)) {
+        if (typeof v === 'string' && v.length > 20) {
+          out[k] = v.substring(0, 6) + '***';
+        } else {
+          out[k] = v;
+        }
+      }
+      return out;
+    });
+
+    res.json({
+      restaurantName: restaurant.name,
+      collection: req.params.collectionName,
+      fieldNames: docs.length > 0 ? Object.keys(docs[0]) : [],
+      sampleDocs: masked,
+    });
+  } catch (err) {
+    console.error('[Debug] Sample collection error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * POST /api/debug/send-test-notification
  * Send a test FCM notification to all active device tokens for a restaurant.
  * Body: { restaurantId, title, body }
