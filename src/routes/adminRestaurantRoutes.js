@@ -1,8 +1,10 @@
 const express = require('express');
+const bcrypt = require('bcryptjs');
+const mongoose = require('mongoose');
 const Restaurant = require('../models/Restaurant');
 const OrderOverride = require('../models/OrderOverride');
 const { requireAdminAuth } = require('../middleware/adminAuthMiddleware');
-const { fetchPaidOrdersFromSource } = require('../utils/sourceDb');
+const { fetchPaidOrdersFromSource, getSourceDbConnection } = require('../utils/sourceDb');
 const { normalizeSourceOrder } = require('../utils/normalizeOrder');
 const { encryptCredential, decryptCredential } = require('../utils/credentialCrypto');
 
@@ -299,7 +301,10 @@ router.get('/:restaurantId/website-credentials', async (req, res) => {
 /**
  * PATCH /api/admin/restaurants/:restaurantId/website-credentials
  * Save/update website admin credentials.
- * If websiteAdminPassword is provided, encrypts and stores it.
+ * If websiteAdminPassword is provided:
+ *   1. Encrypts and stores it in MCP (credential vault)
+ *   2. Bcrypt-hashes it and updates the admin user's passwordHash
+ *      in the restaurant's source DB (users collection, role=admin)
  * If omitted, keeps existing password.
  */
 router.patch('/:restaurantId/website-credentials', async (req, res) => {
@@ -311,11 +316,18 @@ router.patch('/:restaurantId/website-credentials', async (req, res) => {
       websiteAdminPassword,
       websiteAdminNotes,
       websiteAdminIntegrationType,
+      // Source DB sync config (optional overrides)
+      sourceAdminCollection,   // default: 'users'
+      sourceAdminEmailField,   // default: 'email'
+      sourceAdminPasswordField,// default: 'passwordHash'
+      sourceAdminRoleField,    // default: 'role'
+      sourceAdminRoleValue,    // default: 'admin'
     } = req.body;
 
     const restaurant = await Restaurant.findById(req.params.restaurantId);
     if (!restaurant) return res.status(404).json({ error: 'Restaurant not found' });
 
+    // ── 1. Update MCP credential vault ───────────────────────────────────────
     const updates = {};
     if (websiteAdminUrl !== undefined) updates.websiteAdminUrl = websiteAdminUrl || null;
     if (websiteAdminLoginId !== undefined) updates.websiteAdminLoginId = websiteAdminLoginId || null;
@@ -331,6 +343,77 @@ router.patch('/:restaurantId/website-credentials', async (req, res) => {
 
     await Restaurant.findByIdAndUpdate(req.params.restaurantId, { $set: updates });
 
+    // ── 2. Sync password to source DB (restaurant's own MongoDB) ─────────────
+    let syncResult = null;
+    if (websiteAdminPassword) {
+      try {
+        const conn = await getSourceDbConnection(restaurant);
+
+        // Config — use provided overrides or sensible defaults
+        const collection   = sourceAdminCollection    || 'users';
+        const emailField   = sourceAdminEmailField    || 'email';
+        const pwField      = sourceAdminPasswordField || 'passwordHash';
+        const roleField    = sourceAdminRoleField     || 'role';
+        const roleValue    = sourceAdminRoleValue     || 'admin';
+
+        // Determine which user to update:
+        // Priority: websiteAdminEmail (from form) → websiteAdminLoginId → role=admin fallback
+        const lookupEmail = websiteAdminEmail || restaurant.websiteAdminEmail;
+        const query = lookupEmail
+          ? { [emailField]: lookupEmail }
+          : { [roleField]: roleValue };
+
+        // Bcrypt hash the new password (same cost factor as $2a$12$)
+        const saltRounds = 12;
+        const hashed = await bcrypt.hash(websiteAdminPassword, saltRounds);
+
+        // Build model for the users collection
+        const modelName = `AdminUser_${restaurant.restaurantKey}_${collection}`;
+        let UserModel;
+        try {
+          UserModel = conn.model(modelName);
+        } catch {
+          const schema = new mongoose.Schema({}, { strict: false });
+          UserModel = conn.model(modelName, schema, collection);
+        }
+
+        const result = await UserModel.updateOne(
+          query,
+          { $set: { [pwField]: hashed, updatedAt: new Date() } }
+        );
+
+        if (result.matchedCount === 0) {
+          syncResult = {
+            success: false,
+            message: `No user found in source DB with ${JSON.stringify(query)}. Password NOT changed on site.`,
+          };
+          console.warn(
+            `[Credentials] Source DB sync — no matching user found: ` +
+            `restaurant="${restaurant.name}" collection="${collection}" query=${JSON.stringify(query)}`
+          );
+        } else {
+          syncResult = {
+            success: true,
+            message: `Password updated on site (${result.modifiedCount} user updated).`,
+            collection,
+            matchedCount: result.matchedCount,
+            modifiedCount: result.modifiedCount,
+          };
+          console.log(
+            `[Credentials] Source DB password synced — restaurant="${restaurant.name}" ` +
+            `collection="${collection}" matchedCount=${result.matchedCount} modifiedCount=${result.modifiedCount}`
+          );
+        }
+      } catch (syncErr) {
+        // Sync failure should not block the MCP save — credentials are already stored
+        syncResult = {
+          success: false,
+          message: `MCP credentials saved but source DB sync failed: ${syncErr.message}`,
+        };
+        console.error('[Credentials] Source DB sync error:', syncErr.message);
+      }
+    }
+
     // Audit log — do NOT log the actual password
     const passwordChanged = !!websiteAdminPassword;
     console.log(
@@ -339,7 +422,10 @@ router.patch('/:restaurantId/website-credentials', async (req, res) => {
       `by admin="${req.admin?.email || 'unknown'}" at ${new Date().toISOString()}`
     );
 
-    res.json({ message: 'Website credentials saved successfully' });
+    res.json({
+      message: 'Website credentials saved successfully',
+      ...(syncResult && { sync: syncResult }),
+    });
   } catch (err) {
     console.error('[Admin] Save website credentials error:', err.message);
     res.status(500).json({ error: 'Failed to save website credentials' });
